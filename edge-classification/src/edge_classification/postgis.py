@@ -17,13 +17,19 @@ def create_geometries_cache_table(
     geometries_table: str = "underpasses.geometries",
     bag_bgt_join_table: str = "underpasses.bag_bgt_join",
     cache_table_name: str = "underpasses.geometries_cache",
+    id_column: str = "underpass_id",
+    geom_column: str = "geom",
+    mode: str = "underpass",
 ) -> str:
     """
     Create an UNLOGGED table with pre-joined underpass and BGT geometry data.
     This avoids repeating the JOIN on every chunk query.
-    
+
+    In "building" mode the BGT geometry is not needed, so no bag_bgt_join
+    happens and the bgt_geom column is left NULL.
+
     UNLOGGED tables are faster but not crash-safe (fine for temporary processing).
-    
+
     Returns:
         Name of the cache table
     """
@@ -36,31 +42,58 @@ def create_geometries_cache_table(
     else:
         schema = 'public'
         table = cache_table_name
-    
-    # Drop if exists and create new
-    query = SQL("""
-        DROP TABLE IF EXISTS {cache_table};
-        
-        CREATE UNLOGGED TABLE {cache_table} AS
-        SELECT
-            un.underpass_id,
-            un.identificatie::text,
-            un.geom AS underpass_geom,
-            bbj.bgt_geometrie AS bgt_geom
-        FROM {geometries_table} un
-        JOIN {bag_bgt_join_table} bbj
-            ON un.identificatie = bbj.identificatie
-        WHERE NOT ST_IsEmpty(un.geom);
-        
-        CREATE INDEX idx_geometries_cache_underpass_id ON {cache_table} (underpass_id);
-        CREATE INDEX idx_geometries_cache_identificatie ON {cache_table} (identificatie);
-        CREATE INDEX idx_geometries_cache_underpass_spatial ON {cache_table} USING GIST (underpass_geom);
-        CREATE INDEX idx_geometries_cache_bgt_spatial ON {cache_table} USING GIST (bgt_geom);
-    """).format(
-        cache_table=Identifier(schema, table),
-        geometries_table=Identifier(*geometries_table.split('.')),
-        bag_bgt_join_table=Identifier(*bag_bgt_join_table.split('.')),
-    )
+
+    un_id = SQL("un.{col}").format(col=Identifier(id_column))
+    un_geom = SQL("un.{col}").format(col=Identifier(geom_column))
+
+    if mode == "building":
+        query = SQL("""
+            DROP TABLE IF EXISTS {cache_table};
+
+            CREATE UNLOGGED TABLE {cache_table} AS
+            SELECT
+                {un_id}::text AS id,
+                un.identificatie::text AS identificatie,
+                {un_geom} AS underpass_geom,
+                NULL::geometry AS bgt_geom
+            FROM {geometries_table} un
+            WHERE NOT ST_IsEmpty({un_geom});
+
+            CREATE INDEX idx_geometries_cache_id ON {cache_table} (id);
+            CREATE INDEX idx_geometries_cache_identificatie ON {cache_table} (identificatie);
+            CREATE INDEX idx_geometries_cache_underpass_spatial ON {cache_table} USING GIST (underpass_geom);
+        """).format(
+            cache_table=Identifier(schema, table),
+            geometries_table=Identifier(*geometries_table.split('.')),
+            un_id=un_id,
+            un_geom=un_geom,
+        )
+    else:
+        query = SQL("""
+            DROP TABLE IF EXISTS {cache_table};
+
+            CREATE UNLOGGED TABLE {cache_table} AS
+            SELECT
+                {un_id}::text AS id,
+                un.identificatie::text AS identificatie,
+                {un_geom} AS underpass_geom,
+                bbj.bgt_geometrie AS bgt_geom
+            FROM {geometries_table} un
+            JOIN {bag_bgt_join_table} bbj
+                ON un.identificatie = bbj.identificatie
+            WHERE NOT ST_IsEmpty({un_geom});
+
+            CREATE INDEX idx_geometries_cache_id ON {cache_table} (id);
+            CREATE INDEX idx_geometries_cache_identificatie ON {cache_table} (identificatie);
+            CREATE INDEX idx_geometries_cache_underpass_spatial ON {cache_table} USING GIST (underpass_geom);
+            CREATE INDEX idx_geometries_cache_bgt_spatial ON {cache_table} USING GIST (bgt_geom);
+        """).format(
+            cache_table=Identifier(schema, table),
+            geometries_table=Identifier(*geometries_table.split('.')),
+            bag_bgt_join_table=Identifier(*bag_bgt_join_table.split('.')),
+            un_id=un_id,
+            un_geom=un_geom,
+        )
     
     with connection.cursor() as cursor:
         cursor.execute(query)
@@ -82,12 +115,17 @@ def create_geometries_cache_table(
 def create_adjacency_cache_table(
     connection: Connection[Any],
     bag_adjacency_table: str = "building_types.bag_adjacency_4",
-    bag_bgt_table: str = "underpasses.bag_bgt_join",
+    adjacent_geom_table: str = "underpasses.bag_bgt_join",
     cache_table_name: str = "underpasses.adjacency_cache",
+    geom_column: str = "bgt_geometrie",
 ) -> str:
     """
     Create an UNLOGGED table with pre-joined adjacency and geometry data.
     This avoids expensive JOINs on every chunk query.
+
+    The adjacent geometry can come from different sources:
+    - underpass mode: bag_bgt_join table (bgt_geometrie column)
+    - building mode:  the building table itself (geometrie column)
     
     UNLOGGED tables are faster but not crash-safe (fine for temporary processing).
     
@@ -103,6 +141,8 @@ def create_adjacency_cache_table(
     else:
         schema = 'public'
         table = cache_table_name
+
+    bag_geom = SQL("bag.{col}").format(col=Identifier(geom_column))
     
     # Drop if exists and create new
     query = SQL("""
@@ -112,18 +152,19 @@ def create_adjacency_cache_table(
         SELECT 
             ba.identificatie,
             ba.adjacent_identificatie,
-            bag.bgt_geometrie AS geometrie
+            {bag_geom} AS geometrie
         FROM {bag_adjacency_table} ba
-        JOIN {bag_bgt_table} bag
+        JOIN {adjacent_geom_table} bag
             ON bag.identificatie = ba.adjacent_identificatie
-        WHERE NOT ST_IsEmpty(bag.bgt_geometrie);
+        WHERE NOT ST_IsEmpty({bag_geom});
                         
         CREATE INDEX idx_adjacency_cache_id ON {cache_table} (identificatie);
         CREATE INDEX idx_adjacency_cache_spatial ON {cache_table} USING GIST (geometrie);
     """).format(
         cache_table=Identifier(schema, table),
         bag_adjacency_table=Identifier(*bag_adjacency_table.split('.')),
-        bag_bgt_table=Identifier(*bag_bgt_table.split('.')),
+        adjacent_geom_table=Identifier(*adjacent_geom_table.split('.')),
+        bag_geom=bag_geom,
     )
     
     with connection.cursor() as cursor:
@@ -182,10 +223,10 @@ def drop_geometries_cache_table(
 
 def load_all_underpass_data_for_chunk(
     connection: Connection[Any],
-    underpass_ids: List[int],
+    underpass_ids: List[str],
     geometries_table: str,
     adjacency_table: str
-) -> Dict[int, Tuple[str, Polygon, Polygon, List[Polygon]]]:
+) -> Dict[str, Tuple[str, Polygon, Polygon, List[Polygon]]]:
     """
     Load ALL underpass data for a chunk in TWO batch queries.
     
@@ -193,24 +234,24 @@ def load_all_underpass_data_for_chunk(
     
     Args:
         connection: Database connection
-        underpass_ids: List of underpass IDs to load
+        underpass_ids: List of IDs (identificatie/underpass_id) to load
         geometries_table: Name of the geometries cache table (pre-joined underpass+BGT data)
         adjacency_table: Name of the adjacency cache table (pre-joined adjacency+BAG data)
         
     Returns:
-        Dict mapping underpass_id to (identificatie, underpass_geom, bgt_geom, adjacent_geoms)
+        Dict mapping id to (identificatie, underpass_geom, bgt_geom, adjacent_geoms)
     """
     # Query for underpass and BGT geometries for ALL underpasses in chunk
     t0 = time.time()
     
     query = SQL("""
         SELECT
-            underpass_id,
+            id,
             identificatie,
             ST_AsBinary(underpass_geom) AS underpass_wkb,
             ST_AsBinary(bgt_geom) AS bgt_wkb
         FROM {cache_table}
-        WHERE underpass_id = ANY(%s)
+        WHERE id = ANY(%s)
     """).format(
         cache_table=Identifier(*geometries_table.split('.')),
     )
@@ -219,10 +260,10 @@ def load_all_underpass_data_for_chunk(
     underpass_data = {}
     with connection.cursor() as cursor:
         cursor.execute(query, (underpass_ids,))
-        for underpass_id, identificatie, underpass_wkb, bgt_wkb in cursor.fetchall():
+        for id_, identificatie, underpass_wkb, bgt_wkb in cursor.fetchall():
             underpass_geom = from_wkb(underpass_wkb)
-            bgt_geom = from_wkb(bgt_wkb)
-            underpass_data[underpass_id] = (identificatie, underpass_geom, bgt_geom, [])
+            bgt_geom = from_wkb(bgt_wkb) if bgt_wkb is not None else None
+            underpass_data[str(id_)] = (identificatie, underpass_geom, bgt_geom, [])
     
     t1 = time.time()
     print(f"    ⏱️  Query 1 (underpass+BGT): {t1-t0:.2f}s for {len(underpass_data)} underpasses")
@@ -254,9 +295,9 @@ def load_all_underpass_data_for_chunk(
         print(f"    ⏱️  Query 2 (adjacency): {t3-t2:.2f}s -> {total_geoms} geometries")
         
         # Add adjacent geometries to underpass data
-        for underpass_id, (identificatie, underpass_geom, bgt_geom, _) in underpass_data.items():
+        for id_, (identificatie, underpass_geom, bgt_geom, _) in underpass_data.items():
             adjacent_geoms = adjacent_by_id.get(identificatie, [])
-            underpass_data[underpass_id] = (identificatie, underpass_geom, bgt_geom, adjacent_geoms)
+            underpass_data[id_] = (identificatie, underpass_geom, bgt_geom, adjacent_geoms)
     
     return underpass_data
 
@@ -265,7 +306,7 @@ def load_all_underpass_data_for_chunk(
 class EdgeClassificationResult:
     """Result of edge classification with edge geometries."""
     
-    underpass_id: int
+    underpass_id: str
     identificatie: str
     edge_type: str  # 'interior', 'exterior', or 'shared'
     geom: LineString
@@ -442,14 +483,10 @@ def write_edges_to_db(
             
             CREATE TABLE {edges_table} (
                 edge_id SERIAL PRIMARY KEY,
-                underpass_id INTEGER NOT NULL,
                 identificatie TEXT NOT NULL,
                 edge_type TEXT NOT NULL,
                 geom GEOMETRY(LineString, 28992)
             );
-            
-            CREATE INDEX IF NOT EXISTS idx_edges_underpass_id
-                ON {edges_table} (underpass_id);
             
             CREATE INDEX IF NOT EXISTS idx_edges_identificatie
                 ON {edges_table} (identificatie);
@@ -468,13 +505,13 @@ def write_edges_to_db(
     # Insert edges using batch insert for performance
     if edges:
         insert_query = SQL("""
-            INSERT INTO {edges_table} (underpass_id, identificatie, edge_type, geom)
-            VALUES (%s, %s, %s, ST_GeomFromWKB(%s, 28992))
+            INSERT INTO {edges_table} (identificatie, edge_type, geom)
+            VALUES (%s, %s, ST_GeomFromWKB(%s, 28992))
         """).format(edges_table=Identifier(*edges_table.split('.')))
         
         # Prepare all data for batch insert
         edge_data = [
-            (edge.underpass_id, edge.identificatie, edge.edge_type, to_wkb(edge.geom))
+            (edge.identificatie, edge.edge_type, to_wkb(edge.geom))
             for edge in edges
         ]
         
@@ -499,10 +536,10 @@ def get_all_underpass_ids(
         List of underpass IDs
     """
     query = SQL("""
-        SELECT DISTINCT underpass_id
+        SELECT DISTINCT identificatie
         FROM {geometries_table}
         WHERE geom IS NOT NULL AND NOT ST_IsEmpty(geom)
-        ORDER BY underpass_id
+        ORDER BY identificatie
     """).format(geometries_table=Identifier(*geometries_table.split('.')))
     
     with connection.cursor() as cursor:
@@ -514,32 +551,43 @@ def get_unprocessed_underpass_ids(
     connection: Connection[Any],
     geometries_table: str = "underpasses.geometries",
     edges_table: str = "underpasses.edges",
-) -> List[int]:
+    id_column: str = "underpass_id",
+    geom_column: str = "geom",
+) -> List[str]:
     """
-    Get underpass IDs that haven't been processed yet.
+    Get IDs that haven't been processed yet.
     
     Args:
         connection: Database connection
         geometries_table: Name of the geometries table
         edges_table: Name of the edges table
+        id_column: Name of the identifier column in both tables
+        geom_column: Name of the geometry column in the geometries table
         
     Returns:
-        List of unprocessed underpass IDs
+        List of unprocessed IDs
     """
+    un_id = SQL("un.{col}").format(col=Identifier(id_column))
+    e_id = SQL("e.{col}").format(col=Identifier(id_column))
+    un_geom = SQL("un.{col}").format(col=Identifier(geom_column))
+
     query = SQL("""
-        SELECT DISTINCT un.underpass_id
+        SELECT DISTINCT {un_id}::text
         FROM {geometries_table} un
         LEFT JOIN {edges_table} e
-            ON un.underpass_id = e.underpass_id
-        WHERE un.geom IS NOT NULL 
-            AND NOT ST_IsEmpty(un.geom)
-            AND e.underpass_id IS NULL
-        ORDER BY un.underpass_id
+            ON {un_id}::text = {e_id}::text
+        WHERE {un_geom} IS NOT NULL 
+            AND NOT ST_IsEmpty({un_geom})
+            AND {e_id} IS NULL
+        ORDER BY 1
     """).format(
         geometries_table=Identifier(*geometries_table.split('.')),
         edges_table=Identifier(*edges_table.split('.')),
+        un_id=un_id,
+        e_id=e_id,
+        un_geom=un_geom,
     )
     
     with connection.cursor() as cursor:
         cursor.execute(query)
-        return [row[0] for row in cursor.fetchall()]
+        return [str(row[0]) for row in cursor.fetchall()]

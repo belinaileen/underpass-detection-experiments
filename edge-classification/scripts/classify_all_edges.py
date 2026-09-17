@@ -80,13 +80,15 @@ def setup_edges_table(db_params: Dict[str, str], edges_table: str) -> None:
             print("✓ Table created")
 
 
-def get_underpass_chunks(db_params: Dict[str, str], geometries_table: str, edges_table: str) -> List[List[int]]:
+def get_underpass_chunks(db_params: Dict[str, str], geometries_table: str, edges_table: str, id_column: str, geom_column: str) -> List[List[str]]:
     """Get chunks of unprocessed underpass IDs."""
     with connect(**db_params) as conn:
         underpass_ids = get_unprocessed_underpass_ids(
             conn,
             geometries_table=geometries_table,
             edges_table=edges_table,
+            id_column=id_column,
+            geom_column=geom_column,
         )
     
     if not underpass_ids:
@@ -101,11 +103,12 @@ def get_underpass_chunks(db_params: Dict[str, str], geometries_table: str, edges
 
 
 def process_chunk(
-    chunk: List[int],
+    chunk: List[str],
     chunk_num: int,
     grid_size: float,
     snap_tolerance: float,
     edges_table: str,
+    mode: str,
     db_params: Dict[str, str],
     adjacency_cache_table: str | None = None,
     geometries_cache_table: str | None = None,
@@ -167,6 +170,7 @@ def process_chunk(
                     adjacent_geoms=adjacent_geoms,
                     grid_size=grid_size,
                     snap_tolerance=snap_tolerance,
+                    mode=mode,
                 )
                 
                 # Convert to result format
@@ -249,6 +253,9 @@ def main() -> int:
     adjacency_cache_table = environ.get(
         "EDGE_CLASSIFICATION_ADJACENCY_CACHE_TABLE", "underpasses.adjacency_cache"
     )
+    id_column = environ.get("EDGE_CLASSIFICATION_ID_COLUMN", "underpass_id")
+    geom_column = environ.get("EDGE_CLASSIFICATION_GEOM_COLUMN", "geom")
+    mode = environ.get("EDGE_CLASSIFICATION_MODE", "underpass")
     
     # Database connection parameters
     db_params = {
@@ -284,23 +291,36 @@ def main() -> int:
             geometries_table=geometries_table,
             bag_bgt_join_table=bag_bgt_join_table,
             cache_table_name=geometries_cache_table,
+            id_column=id_column,
+            geom_column=geom_column,
+            mode=mode,
         )
         print()
         
-        # Create adjacency cache (adjacency + BAG JOIN)
-        adjacency_cache_table_name = create_adjacency_cache_table(
-            conn,
-            bag_adjacency_table=bag_adjacency_table,
-            bag_bgt_table=bag_bgt_join_table,
-            cache_table_name=adjacency_cache_table,
-        )
+        # Create adjacency cache (adjacency + geometry JOIN)
+        if mode == "building":
+            adjacency_cache_table_name = create_adjacency_cache_table(
+                conn,
+                bag_adjacency_table=bag_adjacency_table,
+                adjacent_geom_table=geometries_table,
+                cache_table_name=adjacency_cache_table,
+                geom_column=geom_column,
+            )
+        else:
+            adjacency_cache_table_name = create_adjacency_cache_table(
+                conn,
+                bag_adjacency_table=bag_adjacency_table,
+                adjacent_geom_table=bag_bgt_join_table,
+                cache_table_name=adjacency_cache_table,
+                geom_column="bgt_geometrie",
+            )
     
     print("✓ Cache tables created")
     print("✓ Database setup complete")
     print()
     
     # Get chunks to process
-    underpass_chunks = get_underpass_chunks(db_params, geometries_table, edges_table)
+    underpass_chunks = get_underpass_chunks(db_params, geometries_table, edges_table, id_column, geom_column)
     
     if not underpass_chunks:
         print("✓ All underpasses have been processed!")
@@ -328,6 +348,7 @@ def main() -> int:
                 grid_size,
                 snap_tolerance,
                 edges_table,
+                mode,
                 db_params,
                 adjacency_cache_table_name,
                 geometries_cache_table_name,

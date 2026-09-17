@@ -1,7 +1,7 @@
 """Core edge classification logic for underpass geometries."""
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import List
 
 from shapely.geometry import LineString, MultiLineString, Polygon
 from shapely.ops import snap
@@ -19,7 +19,7 @@ from edge_classification.geometry_ops import (
 class ClassifiedEdges:
     """Result of edge classification for a single underpass."""
     
-    underpass_id: int
+    underpass_id: str
     identificatie: str
     interior_edges: List[LineString]
     exterior_edges: List[LineString]
@@ -27,13 +27,14 @@ class ClassifiedEdges:
 
 
 def classify_edges_for_underpass(
-    underpass_id: int,
+    underpass_id: str,
     identificatie: str,
     underpass_geom: Polygon,
     bgt_geom: Polygon,
     adjacent_geoms: List[Polygon],
     grid_size: float = 0.001,
     snap_tolerance: float = 0.03,
+    mode: str = "underpass",
 ) -> ClassifiedEdges:
     """
     Classify edges of an underpass polygon into interior, exterior, and shared edges.
@@ -54,10 +55,21 @@ def classify_edges_for_underpass(
         adjacent_geoms: List of adjacent building geometries
         grid_size: Grid size for snapping (default: 0.001)
         snap_tolerance: Tolerance for snapping adjacent geometries (default: 0.03)
+        mode: "underpass" (BGT-based) or "building" (adjacency-based)
         
     Returns:
         ClassifiedEdges object containing the classified edge lists
     """
+    if mode == "building":
+        return classify_edges_by_adjacency(
+            underpass_id=underpass_id,
+            identificatie=identificatie,
+            building_geom=underpass_geom,
+            adjacent_geoms=adjacent_geoms,
+            grid_size=grid_size,
+            snap_tolerance=snap_tolerance,
+        )
+    
     # Step 1: Snap BGT to underpass 
     snapped_bgt = snap(bgt_geom, underpass_geom, snap_tolerance)
     
@@ -131,4 +143,62 @@ def classify_edges_for_underpass(
         interior_edges=interior_list,
         exterior_edges=exterior_list,
         shared_edges=shared_list,
+    )
+
+
+def classify_edges_by_adjacency(
+    underpass_id: str,
+    identificatie: str,
+    building_geom: Polygon,
+    adjacent_geoms: List[Polygon],
+    grid_size: float = 0.001,
+    snap_tolerance: float = 0.03,
+) -> ClassifiedEdges:
+    """
+    Classify building edges based on adjacency with neighbouring buildings.
+
+    For buildings, the BGT geometry is irrelevant. Instead:
+    - interior edges = walls shared with adjacent buildings (party walls)
+    - exterior edges = walls facing outside (not touching any adjacent building)
+    - shared edges   = empty (subsumed by interior)
+
+    Args:
+        underpass_id: Identifier (identificatie) of the building
+        identificatie: BAG building identifier
+        building_geom: The building polygon geometry
+        adjacent_geoms: List of adjacent building geometries
+        grid_size: Grid size for snapping
+        snap_tolerance: Tolerance for snapping adjacent geometries
+    """
+    full_ring = LineString(building_geom.exterior.coords)
+
+    # Find the portions of the building boundary shared with adjacent buildings
+    shared_parts = []
+    for adjacent_geom in adjacent_geoms:
+        if adjacent_geom is None or adjacent_geom.is_empty:
+            continue
+        adjacent_snapped = snap(adjacent_geom, full_ring, snap_tolerance)
+        intersection = safe_intersection(full_ring, adjacent_snapped, grid_size=grid_size)
+        if intersection and not intersection.is_empty:
+            shared_parts.append(intersection)
+
+    interior_geom = union_geometries(shared_parts) if shared_parts else None
+
+    if interior_geom and not interior_geom.is_empty:
+        exterior_geom = safe_difference(full_ring, interior_geom, grid_size)
+    else:
+        exterior_geom = MultiLineString([full_ring])
+
+    interior_list = dump_multilinestring(interior_geom) if interior_geom else []
+    # Interior rings (courtyards/holes) are treated as interior edges
+    for ring in building_geom.interiors:
+        interior_list.append(LineString(ring.coords))
+    exterior_list = dump_multilinestring(exterior_geom) if exterior_geom else []
+
+    return ClassifiedEdges(
+        underpass_id=underpass_id,
+        identificatie=identificatie,
+        interior_edges=interior_list,
+        exterior_edges=exterior_list,
+        shared_edges=[],
     )

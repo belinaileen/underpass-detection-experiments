@@ -19,7 +19,7 @@ from edge_offset.rings import classify_polygon_from_edge_sets
 @dataclass(frozen=True, slots=True)
 class EdgeRecord:
     identificatie: str
-    underpass_id: int
+    underpass_id: int | None
     movable_edges: MultiLineString
     fixed_edges: MultiLineString
 

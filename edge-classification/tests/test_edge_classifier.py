@@ -279,3 +279,44 @@ class TestClassifyEdgesForUnderpass:
         assert isinstance(result, ClassifiedEdges)
         # Should still find shared edges with valid adjacent buildings
         assert len(result.shared_edges) >= 0
+    
+    def test_building_mode_adjacency(self):
+        """Building mode: interior = shared walls, exterior = facade."""
+        building = Polygon([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)])
+        # Adjacent building sharing the right wall (x=10)
+        adjacent = Polygon([(10, 0), (20, 0), (20, 10), (10, 10), (10, 0)])
+
+        result = classify_edges_for_underpass(
+            underpass_id="1",
+            identificatie="TEST.100",
+            underpass_geom=building,
+            bgt_geom=None,
+            adjacent_geoms=[adjacent],
+            mode="building",
+        )
+
+        # No shared edges in building mode (subsumed into interior)
+        assert len(result.shared_edges) == 0
+        # Interior edges should contain the shared right wall (length ~10)
+        interior_length = sum(e.length for e in result.interior_edges)
+        assert interior_length > 9, "Shared wall should be classified as interior"
+        # Exterior edges should contain the other three walls
+        exterior_length = sum(e.length for e in result.exterior_edges)
+        assert exterior_length > 20, "Facade walls should be classified as exterior"
+    
+    def test_building_mode_no_adjacent(self):
+        """Building mode with no adjacent buildings -> all edges exterior."""
+        building = Polygon([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)])
+
+        result = classify_edges_for_underpass(
+            underpass_id="1",
+            identificatie="TEST.101",
+            underpass_geom=building,
+            bgt_geom=None,
+            adjacent_geoms=[],
+            mode="building",
+        )
+
+        assert len(result.interior_edges) == 0
+        assert len(result.exterior_edges) > 0
+        assert sum(e.length for e in result.exterior_edges) > 30
