@@ -31,7 +31,21 @@ python scripts/detect_underpasses.py
 
 Outputs: `underpasses.geometries`, `underpasses.bag_bgt_join`, `underpasses.bag_minus_bgt`, `underpasses.snapped_differences`
 
-### 2. Edge Offset (edge-offset)
+### 2. Edge Classification (edge-classification)
+
+Classifies underpass polygon edges as interior, exterior, or shared.
+
+```bash
+cd edge-classification
+cp .env.example .env      # edit with your DB credentials
+uv pip install -e .
+python scripts/classify_all_edges.py
+```
+
+Outputs: `underpasses.edges`
+
+
+### 3. Edge Offset (edge-offset)
 
 Offsets underpass polygon edges to produce extended geometries.
 
@@ -44,18 +58,6 @@ python scripts/offset_all_polygons.py
 
 Outputs: `underpasses.extended_geometries`, `underpasses.skipped_underpasses`
 
-### 3. Edge Classification (edge-classification)
-
-Classifies building polygon edges as interior, exterior, or shared.
-
-```bash
-cd edge-classification
-cp .env.example .env      # edit with your DB credentials
-uv pip install -e .
-python scripts/classify_all_edges.py
-```
-
-Outputs: `underpasses.edges`
 
 
 
