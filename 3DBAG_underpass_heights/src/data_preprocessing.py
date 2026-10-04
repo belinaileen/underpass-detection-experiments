@@ -9,31 +9,10 @@ import pyvista as pv
 import os
 
 def load_input_data(camera_parameters_path, underpasses_path, image_footprints_path, min_length):
-    """
-    Load input data from specified paths and preprocess them into GeoDataFrames.
-
-    Args:
-        camera_parameters_path (str): Path to the camera parameters file.
-        image_footprints_path (str): Path to the image footprints file.
-        underpasses_path (str): Path to the underpass polygons file.
-        underpass_edges_path (str): Path to the underpass edges file (optional, can be None).
-        min_length (float): Minimum length of edges to be considered as critical.
-
-    Returns:
-        tuple: A tuple containing the following GeoDataFrames:
-            - df_camera_parameters (GeoDataFrame): GeoDataFrame containing camera parameters.
-            - gdf_image_footprints (GeoDataFrame): GeoDataFrame containing image footprints.
-            - gdf_underpass_polygons (GeoDataFrame): GeoDataFrame containing underpass polygons.
-            - gdf_underpass_edges (GeoDataFrame or None): GeoDataFrame containing underpass edges if provided, otherwise None.
-    Changes from Juan's code:
-        - takes XYZ present within the footprint file
-        - removal of underpass edges, ground truth
-        - does not add observed_heights column 
-    """
     # Load camera parameters
     df_camera_parameters = pd.read_csv(camera_parameters_path, sep=',', dtype={'image_id': str})
 
-    # Load image footprints. Add camera center per footprint
+    # Load image footprints
     gdf_image_footprints = gpd.read_file(image_footprints_path)
     gdf_image_footprints = gdf_image_footprints.set_crs("EPSG:7415", allow_override=True)
 
@@ -43,12 +22,16 @@ def load_input_data(camera_parameters_path, underpasses_path, image_footprints_p
     gdf_underpass_polygons = gdf_underpass_polygons.rename(columns={'identificatie': 'building_id'})
     gdf_underpass_polygons['underpass_id'] = gdf_underpass_polygons.index + 1
 
-    # merge for ading camera center per footprint
-    # gdf_image_footprints = gdf_image_footprints.merge(df_camera_parameters, left_on='image_id', right_on='image_id', how='left')
-    gdf_image_footprints = gdf_image_footprints[['image_id', 'geometry', 'X', 'Y', 'Z']].rename(columns={'X': 'camera_x', 'Y': 'camera_y', 'Z': 'camera_z'})
+    # Ensure column case-insensitivity just in case (handles 'x'/'X', 'y'/'Y', 'z'/'Z')
+    column_mapping = {col: col.upper() for col in gdf_image_footprints.columns if col.lower() in ['x', 'y', 'z']}
+    gdf_image_footprints = gdf_image_footprints.rename(columns=column_mapping)
+
+    # Select required columns and rename coordinates
+    gdf_image_footprints = gdf_image_footprints[['image_id', 'geometry', 'X', 'Y', 'Z']].rename(
+        columns={'X': 'camera_x', 'Y': 'camera_y', 'Z': 'camera_z'}
+    )
 
     return df_camera_parameters, gdf_underpass_polygons, gdf_image_footprints
-
 
 def load_tile_data( geojson_2d_path, geojson_3d_path):
 
@@ -77,46 +60,77 @@ def load_tile_data( geojson_2d_path, geojson_3d_path):
 
     return gdf_building_2d, gdf_building_3d
 
+import geopandas as gpd
+import shapely.geometry
+
 def find_critical_edges(gdf_underpass_polygons, gdf_building_footprints, buf_tol, simpl_tol, min_length):
     """Find critical edges of underpass polygons that intersect with building footprints.
 
     Args:
-        gdf_underpass_polygons (GeoDataFrame): GeoDataFrame containing underpass polygons with columns 'underpass_id', 'building_id', and 'geometry'.
-        gdf_building_footprints (GeoDataFrame): GeoDataFrame containing building footprints with columns 'building_id' and 'geometry'.
-        buf_tol (float): Buffer tolerance for the intersection of underpass polygons with building fottprints.
-        simpl_tol (float): Simplification tolerance for underpass polygons to reduce the number of points in the extracted edges.
-        min_length (float): Minimum length of edges to be considered as critical.
+        gdf_underpass_polygons (GeoDataFrame): GeoDataFrame containing underpass polygons 
+            with columns 'underpass_id', 'building_id', and 'geometry'.
+        gdf_building_footprints (GeoDataFrame): GeoDataFrame containing building footprints 
+            with columns 'building_id' and 'geometry'.
+        buf_tol (float): Buffer tolerance for intersecting underpass edges with building footprints.
+        simpl_tol (float): Simplification tolerance for underpass polygons.
+        min_length (float): Minimum length of edges to consider as critical.
 
     Returns:
-        GeoDataFrame: A GeoDataFrame containing critical edges with columns 'edge_id', 'geometry', 'underpass_id', and 'building_id'.
+        tuple: (gdf_underpass_intersected, gdf_critical_edges)
     """
+    # 1. Align CRS before spatial operations
+    gdf_building_footprints = gdf_building_footprints.to_crs(gdf_underpass_polygons.crs)
 
-    # Intersect buildings with underpass polygons
-    gdf_building_2d = gdf_building_2d.to_crs(gdf_underpass_polygons.crs)
-    gdf_underpass_intersected = gpd.sjoin(gdf_underpass_polygons, gdf_building_2d, how='inner', predicate='intersects')
-    gdf_underpass_intersected = gdf_underpass_intersected[['underpass_id', 'building_id_left', 'geometry']].rename(columns={'building_id_left': 'building_id'})
+    # 2. keep only underpasses that intersect with building in 2D tile
+    gdf_underpass_intersected = gpd.sjoin(
+        gdf_underpass_polygons, 
+        gdf_building_footprints, 
+        how='inner', 
+        predicate='intersects')
+    
+    # 3. Clean up columns after spatial join
+    # Handles column suffix naming whether building_id came from left or right frame
+    building_col = 'building_id_left' if 'building_id_left' in gdf_underpass_intersected.columns else 'building_id'
+    gdf_underpass_intersected = gdf_underpass_intersected[
+        ['underpass_id', building_col, 'geometry']].rename(columns={building_col: 'building_id'})
 
-    # Extract edges from intersected underpass polygons
+    # 4. Extract edges from intersected underpass polygons
     edge_records = []
     edge_id = 1
+    
     for _, row in gdf_underpass_intersected.iterrows():
         underpass_id = row['underpass_id']
         building_id = row['building_id']
 
-        # Simplify polygon to reduce the amount of points in the exracted edges
+        # Simplify polygon to reduce boundary point count
         poly = row['geometry'].simplify(tolerance=simpl_tol, preserve_topology=True)
+        
+        if poly.is_empty or not hasattr(poly, 'exterior'):
+            continue
+            
         coords = list(poly.exterior.coords)
 
-        building_geom = gdf_building_footprints.loc[gdf_building_2d.building_id == building_id, 'geometry'].iloc[0]
+        # Retrieve geometry using gdf_building_footprints
+        matching_buildings = gdf_building_footprints.loc[gdf_building_footprints['building_id'] == building_id, 'geometry']
+        if matching_buildings.empty:
+            continue
+
+        building_geom = matching_buildings.iloc[0]
         building_boundary_buffered = building_geom.boundary.buffer(buf_tol)
 
+        # Check each segment of the underpass boundary
         for i in range(len(coords) - 1):
-            candidate_edge = shapely.geometry.LineString([coords[i], coords[i+1]])
-            # Intersect edge with buidling ID, if True, label as critical edge
+            candidate_edge = shapely.geometry.LineString([coords[i], coords[i + 1]])
+            
             if candidate_edge.length < min_length:
                 continue
+                
             if candidate_edge.intersects(building_boundary_buffered):
-                edge_records.append({'edge_id': edge_id, 'geometry': candidate_edge, 'underpass_id': underpass_id, 'building_id': building_id})
+                edge_records.append({
+                    'edge_id': edge_id, 
+                    'geometry': candidate_edge, 
+                    'underpass_id': underpass_id, 
+                    'building_id': building_id})
                 edge_id += 1
 
     gdf_critical_edges = gpd.GeoDataFrame(edge_records, crs=gdf_underpass_polygons.crs)

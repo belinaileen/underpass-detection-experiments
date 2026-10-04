@@ -33,9 +33,9 @@ geojson_3d_path = os.path.join(tiles_directory, 'lod22_3d.geojson')
 underpasses_path = os.path.join(underpasses_directory, 'underpasses_rotterdam.geojson')
 
 oblique_images_dir = os.path.join(PROJECT_ROOT, 'data/oblique_images')
-image_footprints_path = os.path.join(oblique_images_dir, 'rotterdam_footprints_renamed.geojson')
+image_footprints_path = os.path.join(oblique_images_dir, 'rotterdam_footprints_rename.geojson')
 tile_footprint_path = os.path.join(oblique_images_dir, 'intersected_tile_footprint.geojson')
-camera_parameters_path = os.path.join(PROJECT_ROOT, 'output/rotterdam_camera_parameters.csv')
+camera_parameters_path = os.path.join(PROJECT_ROOT, 'data/rotterdam_camera_parameters.csv')
 
 rotterdam_sample_dir = os.path.join(PROJECT_ROOT, 'rotterdam_sample')
 
@@ -79,17 +79,16 @@ elif height_estimation_method == "unet_method":
 
 # 2. LOAD INPUT DATA IN GEOPANDAS DATAFRAMES
 # ------------------------------------------
-df_camera_parameters, gdf_underpass_polygons, gdf_building_2d, gdf_building_3d, gdf_image_footprints = (
-    data_preprocessing.load_input_data(
-        camera_parameters_path, underpasses_path, geojson_2d_path, geojson_3d_path, image_footprints_path, min_length=2))
+df_camera_parameters, gdf_underpass_polygons, gdf_image_footprints = data_preprocessing.load_input_data(camera_parameters_path, underpasses_path, image_footprints_path, min_length=2)
+
+gdf_building_2d, gdf_building_3d = data_preprocessing.load_tile_data(geojson_2d_path, geojson_3d_path)
 
 if 'id' in df_camera_parameters.columns:
     df_camera_parameters['image_id'] = df_camera_parameters['id']
 
 print("[INFO] Computing critical edges and walls...")
-    # 4. FIND CRITICAL EDGES (INTERSECTION OF BUILDING FOOTPRINTS WITH UNDERPASSES) 
-    # (ONLY IF underpass edges are not provided)
-    # -----------------------------------------------------------------------------
+
+# building_2d and underpass polygons -> intersections -> critical building edges
 gdf_underpass_intersected, gdf_critical_edges = data_preprocessing.find_critical_edges(
     gdf_underpass_polygons, gdf_building_2d, buf_tol=0.1, simpl_tol=0.2, min_length=2
 )
