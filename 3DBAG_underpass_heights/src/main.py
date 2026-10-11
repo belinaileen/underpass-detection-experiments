@@ -37,14 +37,13 @@ image_footprints_path = os.path.join(oblique_images_dir, 'rotterdam_footprints_r
 tile_footprint_path = os.path.join(oblique_images_dir, 'intersected_tile_footprint.geojson')
 camera_parameters_path = os.path.join(PROJECT_ROOT, 'data/rotterdam_camera_parameters.csv')
 
-rotterdam_sample_dir = os.path.join(PROJECT_ROOT, 'rotterdam_sample')
+rotterdam_sample_dir = os.path.join('/Users/belinaileen/Desktop/rotterdam_sample')
 
 oblique_image_dirs = [
     os.path.join(rotterdam_sample_dir, 'oblique_right'),
     os.path.join(rotterdam_sample_dir, 'oblique_left'),
     os.path.join(rotterdam_sample_dir, 'oblique_forward'),
-    os.path.join(rotterdam_sample_dir, 'oblique_back')
-]
+    os.path.join(rotterdam_sample_dir, 'oblique_back')]
 
 # Output directory for all facades
 facades_output_dir = Path(os.path.expanduser("~/Desktop")) / "extracted_facades"
@@ -108,6 +107,7 @@ gdf_image_visibility = data_preprocessing.infere_image_visibility(
 saved_count = 0
 missing_count = 0
 no_wall_count = 0
+none_rect_count = 0 
 
 # Track exact rejection between the stages
 proj_failed_count = 0
@@ -125,13 +125,6 @@ def find_image_path(image_id, search_dirs):
             return candidate_path
             
     return None
-
-# check only on 1 image to see if this is the issue ??
-
-img1 = "217000682_0034_01_0169_P00_01"
-
-gdf_image_visibility = gdf_image_visibility[gdf_image_visibility['image_id'].astype(str).str.contains(img1)]
-
 
     # 7. PERFORM PERSPECTIVE PROJECTION OF CRITICAL WALLS ONTO OBLIQUE IMAGES
     # -----------------------------------------------------------------------
@@ -182,8 +175,6 @@ for _, row in tqdm(
     if not rectangles_2d:
         proj_failed_count += 1
         continue
-          
-    none_rect_count = 0 
     
     # 4. Extract and save facades
     for wall_id, rect_2d in zip(wall_ids, rectangles_2d):
@@ -209,6 +200,8 @@ for _, row in tqdm(
     gc.collect()
 
 print(f" [INFO] Pipeline Breakdown:")
+print(f" None rectified count: {none_rect_count}")
+print(f" facade_warp_failed_count: {facade_warp_failed_count}")
 print(f" Saved: {saved_count}")
 print(f" Projection returned None/empty: {proj_failed_count}")
 print(f" Warping/extraction returned None: {facade_warp_failed_count}")

@@ -26,43 +26,36 @@ def project_walls_on_image(image_id, wall_ids, df_camera_parameters, gdf_critica
     fy = float(df_camera_parameters[df_camera_parameters['image_id'] == image_id]['fy'].iloc[0])
     cx = float(df_camera_parameters[df_camera_parameters['image_id'] == image_id]['cx'].iloc[0])
     cy = float(df_camera_parameters[df_camera_parameters['image_id'] == image_id]['cy'].iloc[0])
-    k = np.array([[fx, 0, cx],
-                    [0, fy, cy],
-                    [0, 0, 1]]).astype(np.float32)
         
     # Compute r matrix
     omega = np.deg2rad(df_camera_parameters[df_camera_parameters['image_id'] == image_id]['omega'].iloc[0])
     phi = np.deg2rad(df_camera_parameters[df_camera_parameters['image_id'] == image_id]['phi'].iloc[0])
     kappa = np.deg2rad(df_camera_parameters[df_camera_parameters['image_id'] == image_id]['kappa'].iloc[0])
-    r_omega = np.array([
-            [1, 0, 0],
-            [0, np.cos(omega), -np.sin(omega)],
-            [0, np.sin(omega),  np.cos(omega)]
-        ])
-    r_phi = np.array([
-            [ np.cos(phi), 0, np.sin(phi)],
-            [0, 1, 0],
-            [-np.sin(phi), 0, np.cos(phi)]
-        ])
-    r_kappa = np.array([
-        [np.cos(kappa), -np.sin(kappa), 0],
-        [np.sin(kappa),  np.cos(kappa), 0],
-        [0, 0, 1]
-        ])
+    r_omega = np.array([[1, 0, 0],
+                        [0, np.cos(omega), -np.sin(omega)],
+                        [0, np.sin(omega),  np.cos(omega)]])
+    r_phi   = np.array([[ np.cos(phi), 0, np.sin(phi)],
+                        [0, 1, 0],
+                        [-np.sin(phi), 0, np.cos(phi)]])
+    r_kappa = np.array([[np.cos(kappa), -np.sin(kappa), 0],
+                        [np.sin(kappa),  np.cos(kappa), 0],
+                        [0, 0, 1]])
 
-    R = r_kappa @ r_phi @ r_omega
+    R_cam_to_world = r_omega @ r_phi @ r_kappa
+
     # Adjusting reflection across plane YZ 
-    # "The world coordinate system X-axis is opposite to the camera coordinate X-axis definition used in the projection model."
-    R = np.diag([-1, 1, 1]) @ R
+    R = np.diag([1, -1, -1]) @ R_cam_to_world.T
 
     # Compute translation vector
     x = df_camera_parameters[df_camera_parameters['image_id'] == image_id]['X'].iloc[0]
     y = df_camera_parameters[df_camera_parameters['image_id'] == image_id]['Y'].iloc[0]
     z = df_camera_parameters[df_camera_parameters['image_id'] == image_id]['Z'].iloc[0]
     t = -R @ np.array([[x], [y], [z]]).astype(np.float32).reshape(3, 1)
-
+    k = np.array([[fx, 0, cx],
+                  [0, fy, cy],
+                  [0, 0, 1]]).astype(np.float64)
     # Compute projection matrix
-    m = k @ np.hstack((R, t.reshape(3, 1)))
+    m = k @ np.hstack((R, t))
 
     rectangles_2d = []
     for wall_id in wall_ids:
