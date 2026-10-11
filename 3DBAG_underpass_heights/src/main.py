@@ -79,7 +79,7 @@ elif height_estimation_method == "unet_method":
 
 # 2. LOAD INPUT DATA IN GEOPANDAS DATAFRAMES
 # ------------------------------------------
-df_camera_parameters, gdf_underpass_polygons, gdf_image_footprints = data_preprocessing.load_input_data(camera_parameters_path, underpasses_path, image_footprints_path, min_length=2)
+df_camera_parameters, gdf_underpass_polygons, gdf_image_footprints = data_preprocessing.load_input_data(camera_parameters_path, underpasses_path, image_footprints_path)
 
 gdf_building_2d, gdf_building_3d = data_preprocessing.load_tile_data(geojson_2d_path, geojson_3d_path)
 

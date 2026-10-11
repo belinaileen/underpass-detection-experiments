@@ -8,7 +8,8 @@ from shapely.geometry import Polygon
 import pyvista as pv
 import os
 
-def load_input_data(camera_parameters_path, underpasses_path, image_footprints_path, min_length):
+# def load_input_data(camera_parameters_path, underpasses_path, image_footprints_path, min_length):
+def load_input_data(camera_parameters_path, underpasses_path, image_footprints_path):
     # Load camera parameters
     df_camera_parameters = pd.read_csv(camera_parameters_path, sep=',', dtype={'image_id': str})
 
@@ -60,8 +61,6 @@ def load_tile_data( geojson_2d_path, geojson_3d_path):
 
     return gdf_building_2d, gdf_building_3d
 
-import geopandas as gpd
-import shapely.geometry
 
 def find_critical_edges(gdf_underpass_polygons, gdf_building_footprints, buf_tol, simpl_tol, min_length):
     """Find critical edges of underpass polygons that intersect with building footprints.
@@ -411,5 +410,5 @@ def infere_image_visibility(gdf_image_footprints, gdf_critical_walls, theta):
 
     # Keep only rows where visible_walls list is not empty
     gdf_image_visibility = gdf_image_visibility[gdf_image_visibility['visible_walls'].apply(len) > 0]
-
+    print(gdf_image_visibility)
     return gdf_image_visibility
